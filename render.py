@@ -95,7 +95,12 @@ def render_sub(ray_direction, length, vertex, face):
     origin_tile = origin_tile.cuda()
     meshes = meshes.cuda()
     T = origin_tile - meshes[:, 0]
-    rays = torch.reshape(ray_direction, [-1, 1, 3]).repeat([1, n_meshes, 1])
+    # print("*************ray_direction***********")
+    # print(ray_direction.size())
+    # print("*************n_meshes***********")
+    # print(n_meshes)
+    rays = torch.reshape(ray_direction, [-1, 1, 3])
+    rays = rays.repeat([1, n_meshes, 1])
     edge_1 = torch.reshape(edge_1, [1, -1, 3]).repeat([n_rays, 1, 1])
     edge_2 = torch.reshape(edge_2, [1, -1, 3]).repeat([n_rays, 1, 1])
 

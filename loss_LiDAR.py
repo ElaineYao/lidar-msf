@@ -15,7 +15,12 @@ def lossRenderAttack(outputPytorch, vertex, vertex_og, face, mu):
 
     fx = torch.floor(x_var * 512.0 / 120 + 512.0 / 2).long()
     fy = torch.floor(y_var * 512.0 / 120 + 512.0 / 2).long()
-
+    # print("fx:")
+    # fx_1 = fx[fx > 511]
+    # print(fx_1)
+    # print("fy:")
+    # fy_1 = fy[fy > 511]
+    # print(fy_1)
     mask = torch.zeros((512, 512)).cuda().index_put((fx, fy), torch.ones(fx.shape).cuda())
     mask1 = torch.where(torch.mul(mask, outputPytorch[1]) >= 0.5, torch.ones_like(mask), torch.zeros_like(mask))
 

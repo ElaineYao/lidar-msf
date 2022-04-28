@@ -18,6 +18,12 @@ from scipy.spatial.transform import Rotation as R
 from pytorch.yolo_models.utils_yolo import *
 from pytorch.yolo_models.darknet import Darknet
 
+import torchvision
+import torchvision.transforms as T
+from PIL import Image
+import matplotlib.pyplot as plt
+
+
 def read_cali(path):
     file1 = open(path, 'r')
     Lines = file1.readlines()
@@ -224,6 +230,7 @@ class attack_msf():
         batch_size = 1
 
         self.object_v.requires_grad = True
+        # bx is the original object, first we add random noise to object vertex to start with
         bx = self.object_v.clone().detach().requires_grad_()
         sample_diff = np.random.uniform(-0.001, 0.001, self.object_v.shape)
         sample_diff = torch.tensor(sample_diff).cuda().float()
@@ -247,12 +254,33 @@ class attack_msf():
             adv_total_loss = None
 
             point_cloud = render.render(self.ray_direction, self.length, self.object_v, self.object_f, self.i_final)
+            # print("-----")
+            # print("#######")
+            # print(point_cloud.size())
             grid = xyzi2grid_v2(point_cloud[:, 0], point_cloud[:, 1], point_cloud[:, 2], point_cloud[:, 3])
 
             featureM = gridi2feature_v2(grid, self.direction_val, self.dist_val)
 
             outputPytorch = self.LiDAR_model(featureM)
-
+            # print("-----")
+            # print("#######")
+            # cate = outputPytorch[5].detach()
+            # cat = np.squeeze(cate)
+            # cat = cat[2,:,:]
+            # plt.imshow(cat,cmap='gray')
+            # plt.savefig('height3.png')
+            # img_ = torch.squeeze(outputPytorch[0])
+            # transform = T.ToPILImage()
+            # print(img_.size())
+            # img_ = img_.detach().cpu()
+            # convert the tensor to PIL image using above transform
+            # img = transform(img_)
+            # i = 0
+            # display the PIL image
+            # img.save("category.jpg")
+            # print(outputPytorch[5].size())
+            # print(len(outputPytorch))
+            # print("-----")
             lossValue, loss_object, loss_distance, loss_center, loss_z = loss_LiDAR.lossRenderAttack(outputPytorch, self.object_v, self.object_ori, self.object_f, 0.05)
 
             camera_v = self.object_v.clone()
@@ -282,14 +310,15 @@ class attack_msf():
             background_tensor.masked_scatter_(fg_mask_tensor, image_tensor.masked_select(new_mask_tensor))
 
             final_image = torch.clamp(background_tensor.float(), 0, 1)[None]
-
             final, outputs = self.model(final_image)
 
             num_pred = 0.0
             removed = 0.0
             for index, out in enumerate(outputs):
-                num_anchor = out.shape[1] // (num_class + 5)
+                num_anchor = out.shape[1] // (num_class + 5) # num_anchor = 3
+                # shape the tensor
                 out = out.view(batch_size * num_anchor, num_class + 5, out.shape[2], out.shape[3])
+                # I see. Here, it only uses confidence instead of the score for each class as metric
                 cfs = torch.nn.functional.sigmoid(out[:, 4]).cuda()
                 mask = (cfs >= threshold).type(torch.FloatTensor).cuda()
                 num_pred += torch.numel(cfs)
@@ -302,7 +331,9 @@ class attack_msf():
                 else:
                     adv_total_loss += loss
             total_loss = 12 * (F.relu(torch.clamp(adv_total_loss, min=0) - 0.01) / 5.0)
+            # total_loss is the overall loss function
             total_loss += lossValue
+            # best_it is the min total_loss,meaning, best stores the best result
             if best_it > total_loss.data.cpu() or it == 0:
                 best_it = total_loss.data.cpu().clone()
                 best_vertex = self.object_v.data.cpu().clone()
@@ -312,15 +343,18 @@ class attack_msf():
                 best_out_lidar = outputPytorch[:]
                 pc_ = point_cloud[:, :3].cpu().detach().numpy()
 
-
             print('Iteration {} of {}: Loss={}'.format(it, iteration, total_loss.data.cpu().numpy()))
             self.object_v = self.object_v.cuda()
 
             if self.args.opt == "Adam":
+                # clears old gradients from the last step
                 opt.zero_grad()
+                # computes the derivative of the loss w.r.t. the parameters using backpropagation.
                 total_loss.backward(retain_graph=True)
+                # causes the optimizer to take a step based on the gradients of the parameters.
                 opt.step()
             else:
+                # defaul is pgd optimization
                 pgd_grad = autograd.grad([total_loss.sum()], [self.object_v])[0]
                 with torch.no_grad():
                     loss_grad_sign = pgd_grad.sign()
@@ -342,7 +376,14 @@ class attack_msf():
         vertice = best_vertex.numpy()
         face = best_face.numpy()
         pp = ppath.split('/')[-1].split('.bin')[0]
+        # through vertex and face we can reconstruct this object
+        # to create a ply file, save other elements in ply and only change the vertex , tho I don't know what r is for
         render.savemesh(self.args.object, self.args.object_save + pp + '_v2.ply', vertice, face, r=0.33)
+
+        # because plydata['vertex']['x'] = vertice[:, 0]
+        # x range:  0.7310238
+        # y range:  0.8536951
+        # z range:  1.2403252
 
         print('x range: ', vertice[:, 0].max() - vertice[:, 0].min())
         print('y range: ', vertice[:, 1].max() - vertice[:, 1].min())
@@ -351,13 +392,58 @@ class attack_msf():
         PCLConverted = mapPointToGrid(pc_)
 
         print('------------  Pytorch Output ------------')
+        # len(obj) = 119, len(label_map) = (262144,)
         obj, label_map = cluster.cluster(best_out_lidar[1].cpu().detach().numpy(), best_out_lidar[2].cpu().detach().numpy(), best_out_lidar[3].cpu().detach().numpy(), best_out_lidar[0].cpu().detach().numpy(), best_out_lidar[5].cpu().detach().numpy())
+        # print("obj len is: "+str(len(obj))+", label_map len is: "+str(label_map.shape))
+        # with open('obj.txt', 'w') as f:
+        #     for item in obj:
+        #         f.write("%s\n" % item)
+        # np.savetxt("label_map.txt", label_map, delimiter =", ")
 
+        # len(obstacle) = 17, obstacle object; len(cluster_id_list) = 119
         obstacle, cluster_id_list = twod2threed(obj, label_map, self.PCL, PCLConverted)
+        # print("obstacle len is: "+str(len(obstacle))+", cluster_id_list: "+str(len(cluster_id_list)))
+        # with open('obstacle.txt', 'w') as f:
+        #     for item in obstacle:
+        #         f.write("%s\n" % item)
+        # with open('cluster_id_list.txt', 'w') as f:
+        #     for item in cluster_id_list:
+        #         f.write("%s\n" % item)
+
         self.pc_save = pc_
+        print("*****")
+        print("size of pc_save is: "+str(type(self.pc_save)))
+        print("len of pc_save is: "+str(len(self.pc_save)))
         self.best_final_img = best_final_img.numpy()
         self.best_vertex = best_vertex.numpy()
         self.benign = bx.clone().data.cpu().numpy()
+
+        # Elaine
+
+        cam_img = self.best_final_img.detach()
+        cat = np.squeeze(cam_img)
+        # cat = cat[2,:,:]
+        plt.imshow(cam_img)
+        plt.savefig('./result/bench1/benchbg.png')
+
+
+
+
+        # img_ = torch.squeeze(final_image)
+        #     transform = T.ToPILImage()
+        #     # print(img_.size())
+        #     img_ = img_.detach().cpu()
+        #     # convert the tensor to PIL image using above transform
+        #     img = transform(img_)
+        #     i = 0
+        #     # display the PIL image
+        #     img.save("final_image"+str(i)+".jpg")
+        #     i +=1
+        #     # im = Image.fromarray(final_image)
+        #     # im.save("final.jpg")
+        #     final, outputs = self.model(final_image)
+
+
 
     def savemesh(self, path_r, path_w, vet, r):
         plydata = PlyData.read(path_r)
@@ -446,9 +532,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-obj', '--obj', dest='object', default="./object/object.ply")
     parser.add_argument('-obj_save' ,'--obj_save', dest='object_save', default="./object/obj_save")
-    parser.add_argument('-lidar', '--lidar', dest='lidar')
-    parser.add_argument('-cam', '--cam', dest='cam')
-    parser.add_argument('-cali', '--cali', dest='cali')
+    parser.add_argument('-lidar', '--lidar', dest='lidar', default = "./data/lidar.bin")
+    parser.add_argument('-cam', '--cam', dest='cam', default="./data/cam.png")
+    parser.add_argument('-cali', '--cali', dest='cali', default="./data/cali.txt")
     parser.add_argument('-o', '--opt', dest='opt', default="pgd")
     parser.add_argument('-e', '--epsilon', dest='epsilon', type=float, default=0.2)
     parser.add_argument('-it', '--iteration', dest='iteration', type=int, default=1000)

@@ -220,6 +220,67 @@ def xyzi2gridhard(x_var, y_var, z_var, i_var, X_RES=512, Y_RES=512, H_RES=120):
 
     return grids
 
+def xyzi2gridhard_2(x_var, y_var, z_var, i_var, X_RES=512, Y_RES=512, H_RES=120):
+    inv_res_x = 0.5 * float(X_RES) / 70
+
+    i_float = (70 - (0.707107 * (x_var - y_var))) * inv_res_x
+    j_float = (70 - (0.707107 * (x_var + y_var))) * inv_res_x
+
+    k_float = z_var * H_RES / 10 + H_RES / 2
+
+    i_float = i_float.float()
+    j_float = j_float.float()
+    k_float = k_float.float()
+
+    i_float = torch.clamp(i_float, 0, X_RES - 1)  # i_float in [0, X_RES-1]
+    j_float = torch.clamp(j_float, 0, Y_RES - 1)  # i_float in [0, Y_RES-1]
+    k_float = torch.clamp(k_float, 0, H_RES - 1)  # i_float in [0, H_RES-1]
+
+    # smaller in [0, RES - 2]
+    i_smallerf = torch.clamp(torch.floor(i_float), 0, X_RES - 2)  # in [0, X_RES-2]
+    j_smallerf = torch.clamp(torch.floor(j_float), 0, Y_RES - 2)
+    k_smallerf = torch.clamp(torch.floor(k_float), 0, H_RES - 2)
+
+    i_smaller = i_smallerf.long()
+    j_smaller = j_smallerf.long()
+    k_smaller = k_smallerf.long()
+
+    # bigger in [1, RES - 1]
+    i_bigger = i_smaller + 1
+    j_bigger = j_smaller + 1
+    k_bigger = k_smaller + 1
+
+    alpha = torch.ones_like(i_float)
+    beta = torch.ones_like(i_float)
+    gamma = torch.ones_like(i_float)
+
+    alpha_ = 1 - alpha
+    beta_ = 1 - beta
+    gamma_ = 1 - gamma
+
+    grids = Variable(torch.zeros((2, X_RES, Y_RES, H_RES), dtype=x_var.dtype)).cuda()
+    weight111 = torch.tensor(alpha_ * beta_ * gamma_).cuda()
+
+    # grids[0, :, :, :] = grids[0, :, :, :].index_put((i_bigger, j_bigger, k_bigger), weight111, accumulate=True)
+
+    # weight111 = weight111 * i_var
+
+    # grids[1, :, :, :] = grids[1, :, :, :].index_put((i_bigger, j_bigger, k_bigger), weight111, accumulate=True)
+
+    temp = grids[0, :, :, :].view(-1)
+    index_8 = i_bigger * 512 * 120 + j_bigger * 120 + k_bigger
+    temp = temp.index_add_(0, index_8, weight111)
+    grids[0, :, :, :] = temp.view(512, 512, 120)
+    del temp
+
+    weight111 = weight111 * i_var
+    temp = grids[1, :, :, :].view(-1)
+    temp = temp.index_add_(0, index_8, weight111)
+    grids[1, :, :, :] = temp.view(512, 512, 120)
+    del temp
+
+    return grids
+
 
 def gridi2feature_v2(grids, direction, dist):
     MIN_H = -5
